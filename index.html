@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>카카오 오픈채팅 딥링크 QA</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif;
+         background: #111; color: #eee; padding: 12px; font-size: 14px; line-height: 1.5; }
+  h1 { font-size: 16px; margin-bottom: 8px; }
+  h2 { font-size: 13px; margin: 16px 0 6px; color: #8ab4f8; }
+  .env { background: #1d1d1d; border-radius: 8px; padding: 8px 10px; font-size: 11px;
+         word-break: break-all; color: #aaa; }
+  .env b { color: #ffd54f; font-size: 13px; }
+  .cfg input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #444;
+               background: #1d1d1d; color: #eee; font-size: 13px; }
+  .cfg .derived { font-size: 11px; color: #888; margin-top: 4px; word-break: break-all; }
+  button, a.btn { display: block; width: 100%; padding: 13px; margin: 6px 0; border-radius: 10px;
+                  border: none; font-size: 14px; font-weight: 600; text-align: center;
+                  text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: rgba(255,255,255,.2); }
+  .m-a { background: #fee500; color: #191919; }
+  .m-b { background: #4a6cf7; color: #fff; }
+  .m-c { background: #7c4dff; color: #fff; }
+  .m-d { background: #2e7d32; color: #fff; }
+  .m-e { background: #e65100; color: #fff; }
+  .sub { background: #333; color: #ccc; font-weight: 400; font-size: 12px; padding: 9px; }
+  .verdict { display: flex; gap: 6px; }
+  .verdict button { font-size: 12px; padding: 9px 4px; }
+  .v-ok { background: #1b5e20; color: #fff; } .v-no { background: #b71c1c; color: #fff; }
+  .v-cancel { background: #6d4c41; color: #fff; }
+  #log { background: #000; border: 1px solid #333; border-radius: 8px; padding: 8px;
+         font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; height: 220px;
+         overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .l-ev  { color: #80cbc4; } .l-act { color: #ffd54f; } .l-sig { color: #f48fb1; }
+  .l-res { color: #a5d6a7; } .l-err { color: #ef9a9a; }
+  .note { font-size: 11px; color: #888; margin: 2px 0 8px; }
+</style>
+</head>
+<body>
+
+<h1>카카오 오픈채팅 딥링크 QA</h1>
+<div class="env" id="env">환경 분석 중…</div>
+
+<h2>0. 설정 — 오픈채팅 링크</h2>
+<div class="cfg">
+  <input id="okLink" type="url" placeholder="https://open.kakao.com/o/XXXXXXXX"
+         value="https://open.kakao.com/o/" />
+  <div class="derived" id="derived"></div>
+</div>
+
+<h2>A. 앵커 직접 탭 — kakaoopen:// (가장 안정적이라고 알려진 방식)</h2>
+<p class="note">href에 스킴이 박힌 진짜 &lt;a&gt; 태그. iOS click-gate를 가장 확실히 통과.</p>
+<a class="btn m-a" id="btnA" href="#">A: kakaoopen://join 앵커 탭</a>
+
+<h2>B. JS location.href — 클릭 핸들러 안에서 스킴 호출</h2>
+<p class="note">프로덕션 버튼이 React 핸들러일 때와 같은 경로. 동기 user-gesture 내 호출.</p>
+<button class="m-b" id="btnB">B: location.href = kakaoopen://</button>
+
+<h2>C. window.open — 스킴</h2>
+<button class="m-c" id="btnC">C: window.open(kakaoopen://)</button>
+
+<h2>D. 웹 URL 그대로 — open.kakao.com (현행 방식 = 대조군)</h2>
+<a class="btn m-d" id="btnD" href="#">D: open.kakao.com 앵커 탭</a>
+
+<h2>E. 프로덕션 후보 풀 패턴 — 스킴 + 1.5s 타임아웃 폴백 + 동결감지</h2>
+<p class="note">스킴 호출 → 타이머 동결/hidden 감지 → 실패 판정 시 open.kakao.com 폴백.</p>
+<button class="m-e" id="btnE">E: 풀 패턴 (스킴 → 자동 폴백)</button>
+<a class="btn sub" id="btnManual" href="#">수동 폴백: 카카오톡이 안 열리면 여기를 눌러주세요 (open.kakao.com)</a>
+
+<h2>판정 기록 — 방금 테스트 결과를 직접 기록</h2>
+<div class="verdict">
+  <button class="v-ok" onclick="verdict('앱 열림 ✅')">앱 열림</button>
+  <button class="v-cancel" onclick="verdict('다이얼로그 취소 ⚠️')">다이얼로그→취소</button>
+  <button class="v-no" onclick="verdict('아무 일 없음 ❌')">안 열림</button>
+</div>
+
+<h2>이벤트 로그 <span style="color:#666;font-weight:400">(localStorage 보존 — 앱 갔다 와도 남음)</span></h2>
+<div id="log"></div>
+<button class="sub" onclick="copyLog()">로그 전체 복사 (Slack 공유용)</button>
+<button class="sub" onclick="clearLog()">로그 초기화</button>
+
+<script>
+(function () {
+  var LS_KEY = 'kdq-log';
+  var logEl = document.getElementById('log');
+
+  // ---------- 로그 (localStorage 영속: 앱 전환 후 복귀해도 유지) ----------
+  function now() {
+    var d = new Date();
+    return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  }
+  function log(cls, msg) {
+    var line = '[' + now() + '] ' + msg;
+    var saved = localStorage.getItem(LS_KEY) || '';
+    localStorage.setItem(LS_KEY, saved + cls + '\t' + line + '\n');
+    render();
+  }
+  function render() {
+    var saved = localStorage.getItem(LS_KEY) || '';
+    logEl.innerHTML = saved.trim().split('\n').filter(Boolean).map(function (row) {
+      var i = row.indexOf('\t');
+      var cls = row.slice(0, i), text = row.slice(i + 1);
+      return '<div class="' + cls + '">' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</div>';
+    }).join('');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  window.clearLog = function () { localStorage.removeItem(LS_KEY); render(); };
+  window.copyLog = function () {
+    var text = (localStorage.getItem(LS_KEY) || '').split('\n')
+      .map(function (r) { return r.slice(r.indexOf('\t') + 1); }).join('\n');
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { alert('복사됨'); },
+        function () { prompt('수동 복사:', text); });
+    } else { prompt('수동 복사:', text); }
+  };
+  window.verdict = function (v) { log('l-res', '👤 수동 판정: ' + v); };
+
+  // ---------- 환경 감지 ----------
+  var ua = navigator.userAgent;
+  var inApp =
+    /Instagram/i.test(ua) ? 'Instagram 인앱' :
+    /FBAN|FBAV|FB_IAB/i.test(ua) ? 'Facebook 인앱' :
+    /KAKAOTALK/i.test(ua) ? 'KakaoTalk 인앱' :
+    /Line\//i.test(ua) ? 'LINE 인앱' :
+    /NAVER\(inapp/i.test(ua) ? 'Naver 인앱' :
+    /; wv\)|WebView/i.test(ua) ? '기타 WebView' : '일반 브라우저';
+  var os = /iPhone|iPad|iPod/i.test(ua) ? 'iOS' : /Android/i.test(ua) ? 'Android' : '기타';
+  document.getElementById('env').innerHTML =
+    '<b>' + os + ' / ' + inApp + '</b><br>' + ua;
+
+  // ---------- 페이지 생명주기 신호 전부 기록 ----------
+  ['visibilitychange', 'pagehide', 'pageshow', 'blur', 'focus', 'freeze', 'resume']
+    .forEach(function (ev) {
+      var target = (ev === 'blur' || ev === 'focus') ? window : document;
+      target.addEventListener(ev, function () {
+        log('l-ev', '🔔 ' + ev +
+          (ev === 'visibilitychange' ? ' → hidden=' + document.hidden : ''));
+      });
+    });
+
+  // ---------- 링크 설정 → 스킴 유도 ----------
+  var input = document.getElementById('okLink');
+  var derivedEl = document.getElementById('derived');
+  function links() {
+    var web = input.value.trim();
+    var m = web.match(/open\.kakao\.com\/o\/([A-Za-z0-9]+)/);
+    var code = m ? m[1] : '';
+    var scheme = code ? 'kakaoopen://join?l=' + code + '&r=EW' : '';
+    derivedEl.textContent = scheme ? ('스킴: ' + scheme) : '⚠️ open.kakao.com/o/코드 형식으로 입력';
+    return { web: web, scheme: scheme, code: code };
+  }
+  function syncAnchors() {
+    var l = links();
+    document.getElementById('btnA').href = l.scheme || '#';
+    document.getElementById('btnD').href = l.web || '#';
+    document.getElementById('btnManual').href = l.web || '#';
+  }
+  input.addEventListener('input', syncAnchors);
+
+  // URL 해시로 링크 프리셋 가능: index.html#o/XXXXXXXX
+  if (location.hash.length > 3) {
+    input.value = 'https://open.kakao.com/' + location.hash.slice(1);
+  }
+  syncAnchors();
+
+  // ---------- 각 방식 ----------
+  document.getElementById('btnA').addEventListener('click', function () {
+    log('l-act', '▶ A 앵커 탭: ' + links().scheme); armDetector('A');
+  });
+  document.getElementById('btnD').addEventListener('click', function () {
+    log('l-act', '▶ D 웹 URL 앵커 탭: ' + links().web); armDetector('D');
+  });
+  document.getElementById('btnManual').addEventListener('click', function () {
+    log('l-act', '▶ 수동 폴백 탭');
+  });
+  document.getElementById('btnB').addEventListener('click', function () {
+    var l = links(); if (!l.scheme) return alert('링크 먼저 입력');
+    log('l-act', '▶ B location.href = ' + l.scheme); armDetector('B');
+    location.href = l.scheme;
+  });
+  document.getElementById('btnC').addEventListener('click', function () {
+    var l = links(); if (!l.scheme) return alert('링크 먼저 입력');
+    log('l-act', '▶ C window.open(' + l.scheme + ')'); armDetector('C');
+    var w = window.open(l.scheme);
+    log('l-sig', '  window.open 반환: ' + (w ? 'window 객체' : 'null(차단됨일 수 있음)'));
+  });
+
+  // ---------- E: 풀 패턴 (스킴 → 타이머동결/hidden 감지 → 자동 폴백) ----------
+  document.getElementById('btnE').addEventListener('click', function () {
+    var l = links(); if (!l.scheme) return alert('링크 먼저 입력');
+    log('l-act', '▶ E 풀 패턴 시작 (스킴 호출 + 1500ms 폴백 예약)');
+
+    // 프로덕션이라면 여기서: 픽셀 발화 + sendBeacon CAPI (동일 event_id)
+    if (navigator.sendBeacon) {
+      // 데모: 엔드포인트 없이 sendBeacon 호출 가능 여부만 확인
+      log('l-sig', '  sendBeacon 사용 가능 (실서비스에선 여기서 KakaoLaunch CAPI 전송)');
+    } else {
+      log('l-err', '  ⚠️ sendBeacon 미지원 환경');
+    }
+
+    var t0 = Date.now();
+    var fellBack = false;
+    setTimeout(function () {
+      var elapsed = Date.now() - t0;
+      var frozen = elapsed > 2200;        // 타이머가 700ms+ 늦게 돌았다 = 페이지가 동결됐었다
+      var hidden = document.hidden;
+      log('l-sig', '  ⏱ 폴백 타이머 발화: 경과 ' + elapsed + 'ms (예약 1500ms)' +
+          ' / frozen=' + frozen + ' / hidden=' + hidden);
+      if (frozen || hidden) {
+        log('l-res', '  ✅ 앱 전환 성공으로 추정 → 폴백 취소');
+      } else {
+        fellBack = true;
+        log('l-res', '  ❌ 앱 미실행으로 추정 → open.kakao.com 폴백 실행');
+        location.href = l.web;
+      }
+    }, 1500);
+
+    location.href = l.scheme;
+  });
+
+  // ---------- 클릭 후 3초간 신호 관찰 요약 ----------
+  function armDetector(label) {
+    var t0 = Date.now();
+    var sawHidden = false;
+    var onVis = function () { if (document.hidden) sawHidden = true; };
+    document.addEventListener('visibilitychange', onVis);
+    setTimeout(function () {
+      document.removeEventListener('visibilitychange', onVis);
+      var elapsed = Date.now() - t0;
+      log('l-sig', '  [' + label + '] 3초 관찰: hidden발생=' + sawHidden +
+          ' / 타이머지연=' + (elapsed - 3000) + 'ms' +
+          (elapsed - 3000 > 700 ? ' (동결 있었음→앱 떴을 가능성)' : ''));
+    }, 3000);
+  }
+
+  log('l-ev', '═══ 페이지 로드: ' + os + ' / ' + inApp + ' ═══');
+  render();
+})();
+</script>
+</body>
+</html>
