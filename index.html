@@ -63,8 +63,8 @@
 <h2>D. 웹 URL 그대로 — open.kakao.com (현행 방식 = 대조군)</h2>
 <a class="btn m-d" id="btnD" href="#">D: open.kakao.com 앵커 탭</a>
 
-<h2>E. 프로덕션 후보 풀 패턴 — 스킴 + 1.5s 타임아웃 폴백 + 동결감지</h2>
-<p class="note">스킴 호출 → 타이머 동결/hidden 감지 → 실패 판정 시 open.kakao.com 폴백.</p>
+<h2>E. 프로덕션 후보 풀 패턴 — 스킴 + 3s 타임아웃 폴백 + 동결감지</h2>
+<p class="note">스킴 호출 → 타이머 동결/hidden(누적) 감지 → 실패 판정 시 open.kakao.com 폴백. 다이얼로그 읽는 시간 감안해 3초.</p>
 <button class="m-e" id="btnE">E: 풀 패턴 (스킴 → 자동 폴백)</button>
 <a class="btn sub" id="btnManual" href="#">수동 폴백: 카카오톡이 안 열리면 여기를 눌러주세요 (open.kakao.com)</a>
 
@@ -189,7 +189,7 @@
   // ---------- E: 풀 패턴 (스킴 → 타이머동결/hidden 감지 → 자동 폴백) ----------
   document.getElementById('btnE').addEventListener('click', function () {
     var l = links(); if (!l.scheme) return alert('링크 먼저 입력');
-    log('l-act', '▶ E 풀 패턴 시작 (스킴 호출 + 1500ms 폴백 예약)');
+    log('l-act', '▶ E 풀 패턴 시작 (스킴 호출 + 3000ms 폴백 예약)');
 
     // 프로덕션이라면 여기서: 픽셀 발화 + sendBeacon CAPI (동일 event_id)
     if (navigator.sendBeacon) {
@@ -199,28 +199,8 @@
       log('l-err', '  ⚠️ sendBeacon 미지원 환경');
     }
 
-    var t0 = Date.now();
-    var fellBack = false;
-    setTimeout(function () {
-      var elapsed = Date.now() - t0;
-      var frozen = elapsed > 2200;        // 타이머가 700ms+ 늦게 돌았다 = 페이지가 동결됐었다
-      var hidden = document.hidden;
-      log('l-sig', '  ⏱ 폴백 타이머 발화: 경과 ' + elapsed + 'ms (예약 1500ms)' +
-          ' / frozen=' + frozen + ' / hidden=' + hidden);
-      if (frozen || hidden) {
-        log('l-res', '  ✅ 앱 전환 성공으로 추정 → 폴백 취소');
-      } else {
-        fellBack = true;
-        log('l-res', '  ❌ 앱 미실행으로 추정 → open.kakao.com 폴백 실행');
-        location.href = l.web;
-      }
-    }, 1500);
-
-    location.href = l.scheme;
-  });
-
-  // ---------- 클릭 후 3초간 신호 관찰 요약 ----------
-  function armDetector(label) {
+    // 다이얼로그가 떠 있는 동안에도 hidden 없이 타이머가 계속 돌 수 있으므로,
+    // 창 안에서 hidden이 한 번이라도 발생했는지를 누적 추적해 폴백을 취소한다.
     var t0 = Date.now();
     var sawHidden = false;
     var onVis = function () { if (document.hidden) sawHidden = true; };
@@ -228,10 +208,39 @@
     setTimeout(function () {
       document.removeEventListener('visibilitychange', onVis);
       var elapsed = Date.now() - t0;
-      log('l-sig', '  [' + label + '] 3초 관찰: hidden발생=' + sawHidden +
-          ' / 타이머지연=' + (elapsed - 3000) + 'ms' +
-          (elapsed - 3000 > 700 ? ' (동결 있었음→앱 떴을 가능성)' : ''));
+      var frozen = elapsed > 4000;        // 타이머가 1초+ 늦게 돌았다 = 페이지가 동결됐었다
+      var hidden = document.hidden || sawHidden;
+      log('l-sig', '  ⏱ 폴백 타이머 발화: 경과 ' + elapsed + 'ms (예약 3000ms)' +
+          ' / frozen=' + frozen + ' / hidden(누적)=' + hidden);
+      if (frozen || hidden) {
+        log('l-res', '  ✅ 앱 전환 성공으로 추정 → 폴백 취소');
+      } else {
+        log('l-res', '  ❌ 앱 미실행으로 추정 → open.kakao.com 폴백 실행');
+        location.href = l.web;
+      }
     }, 3000);
+
+    location.href = l.scheme;
+  });
+
+  // ---------- 클릭 후 10초간 신호 관찰 요약 (다이얼로그 읽는 시간 감안) ----------
+  function armDetector(label) {
+    var t0 = Date.now();
+    var sawHidden = false;
+    var onVis = function () {
+      if (document.hidden && !sawHidden) {
+        sawHidden = true;
+        log('l-sig', '  [' + label + '] hidden 발생 (+' + (Date.now() - t0) + 'ms)');
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    setTimeout(function () {
+      document.removeEventListener('visibilitychange', onVis);
+      var elapsed = Date.now() - t0;
+      log('l-sig', '  [' + label + '] 10초 관찰 종료: hidden발생=' + sawHidden +
+          ' / 타이머지연=' + (elapsed - 10000) + 'ms' +
+          (elapsed - 10000 > 1000 ? ' (동결 있었음→앱 떴을 가능성)' : ''));
+    }, 10000);
   }
 
   log('l-ev', '═══ 페이지 로드: ' + os + ' / ' + inApp + ' ═══');
